@@ -40,7 +40,9 @@ Package reflect implements the proposal [go.dev/issue/51520](https://go.dev/issu
 // memory representations of the source value but may result in unexpected
 // consequences in follow-up usage, the caller should clear these values
 // depending on their usage context.
-func DeepCopy[T any](src T) (dst T)
+//
+// To change these predefined behaviors, use provided DeepCopyOption.
+func DeepCopy[T any](src T, opts ...DeepCopyOption) (dst T)
 ```
 
 _Warning_: Not largely tested. Use it with care.
