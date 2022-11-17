@@ -85,10 +85,10 @@ func DisallowTypes(val ...any) DeepCopyOption {
 // There are a few exceptions that may result in a deeply copied value not
 // deeply equal (asserted by DeepEqual(dst, src)) to the source value:
 //
-// 1) Func values are still refer to the same function
-// 2) Chan values are replaced by newly created channels
-// 3) One-way Chan values (receive or read-only) values are still refer
-//    to the same channel
+//  1. Func values are still refer to the same function
+//  2. Chan values are replaced by newly created channels
+//  3. One-way Chan values (receive or read-only) values are still refer
+//     to the same channel
 //
 // Note that while correct uses of DeepCopy do exist, they are not rare.
 // The use of DeepCopy often indicates the copying object does not contain
@@ -115,7 +115,6 @@ func DeepCopy[T any](src T, opts ...DeepCopyOption) (dst T) {
 }
 
 func copyAny(src any, ptrs map[uintptr]any, copyConf *copyConfig) (dst any) {
-
 	if len(copyConf.disallowCopyTypes) != 0 {
 		for i := range copyConf.disallowCopyTypes {
 			if reflect.TypeOf(src) == copyConf.disallowCopyTypes[i] {
@@ -144,7 +143,7 @@ func copyAny(src any, ptrs map[uintptr]any, copyConf *copyConfig) (dst any) {
 		dst = copyArray(src, ptrs, copyConf)
 	case reflect.Map:
 		dst = copyMap(src, ptrs, copyConf)
-	case reflect.Ptr, reflect.UnsafePointer:
+	case reflect.Ptr:
 		dst = copyPointer(src, ptrs, copyConf)
 	case reflect.Struct:
 		dst = copyStruct(src, ptrs, copyConf)
@@ -223,6 +222,9 @@ func copyPointer(x any, ptrs map[uintptr]any, copyConf *copyConfig) any {
 	if v.Kind() != reflect.Pointer {
 		panic(fmt.Errorf("reflect: internal error: must be a Pointer or Ptr; got %v", v.Kind()))
 	}
+	if v.IsNil() {
+		return x
+	}
 	addr := uintptr(v.UnsafePointer())
 	if dc, ok := ptrs[addr]; ok {
 		if copyConf.disallowCopyCircular {
@@ -233,12 +235,10 @@ func copyPointer(x any, ptrs map[uintptr]any, copyConf *copyConfig) any {
 	t := reflect.TypeOf(x)
 	dc := reflect.New(t.Elem())
 	ptrs[addr] = dc.Interface()
-	if !v.IsNil() {
-		item := copyAny(v.Elem().Interface(), ptrs, copyConf)
-		iv := reflect.ValueOf(item)
-		if iv.IsValid() {
-			dc.Elem().Set(reflect.ValueOf(item))
-		}
+	item := copyAny(v.Elem().Interface(), ptrs, copyConf)
+	iv := reflect.ValueOf(item)
+	if iv.IsValid() {
+		dc.Elem().Set(reflect.ValueOf(item))
 	}
 	return dc.Interface()
 }
@@ -279,7 +279,6 @@ func copyChan(x any, ptrs map[uintptr]any, copyConf *copyConfig) any {
 		if !copyConf.disallowCopyBidirectionalChan {
 			dc = reflect.MakeChan(t, v.Cap()).Interface()
 		}
-		fallthrough
 	case reflect.SendDir, reflect.RecvDir:
 		dc = x
 	}
