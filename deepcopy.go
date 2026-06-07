@@ -24,6 +24,32 @@ type copyConfig struct {
 	disallowCopyCircular          bool
 	disallowCopyBidirectionalChan bool
 	disallowCopyTypes             []reflect.Type
+	copyFuncs                     []copyFuncEntry
+}
+
+// copyFuncEntry binds a type (concrete or interface) to a custom copy
+// function that replaces the default deep copy behavior for that type.
+type copyFuncEntry struct {
+	typ reflect.Type
+	fn  func(src any) (dst any)
+}
+
+// customCopy returns the custom copy function registered for srcType, if any.
+// An exact (concrete) type match takes precedence over an interface match;
+// among interfaces the first registered match wins.
+func (c *copyConfig) customCopy(srcType reflect.Type) (func(any) any, bool) {
+	var iface func(any) any
+	found := false
+	for i := range c.copyFuncs {
+		e := c.copyFuncs[i]
+		if e.typ == srcType {
+			return e.fn, true
+		}
+		if !found && e.typ.Kind() == reflect.Interface && srcType.Implements(e.typ) {
+			iface, found = e.fn, true
+		}
+	}
+	return iface, found
 }
 
 // DisallowCopyUnexported returns a DeepCopyOption that disables the behavior
@@ -56,6 +82,54 @@ func DisallowTypes(val ...any) DeepCopyOption {
 	return func(opt *copyConfig) {
 		for i := range val {
 			opt.disallowCopyTypes = append(opt.disallowCopyTypes, reflect.TypeOf(val[i]))
+		}
+	}
+}
+
+// WithCopyFunc returns a DeepCopyOption that replaces the default deep copy
+// behavior for values of type T with fn. This is the general escape hatch for
+// types that must not be copied by their memory representation, such as
+// singletons that must remain shared, or stateful objects like sync.Mutex,
+// os.File, net.Conn, and js.Value.
+//
+// T may be a concrete type or an interface type. When T is an interface, fn
+// applies to every value whose dynamic type implements T (unless a more
+// specific concrete WithCopyFunc is also registered for that value's type).
+//
+// RetainTypes and ZeroTypes are convenience wrappers over WithCopyFunc.
+func WithCopyFunc[T any](fn func(src T) (dst T)) DeepCopyOption {
+	t := reflect.TypeOf((*T)(nil)).Elem()
+	wrapped := func(src any) any { return fn(src.(T)) }
+	return func(opt *copyConfig) {
+		opt.copyFuncs = append(opt.copyFuncs, copyFuncEntry{t, wrapped})
+	}
+}
+
+// RetainTypes returns a DeepCopyOption that retains (shares by reference) the
+// values of the given types instead of deep copying them. Use it for pointers
+// to singletons that must remain singletons in the copied result.
+func RetainTypes(val ...any) DeepCopyOption {
+	return func(opt *copyConfig) {
+		for i := range val {
+			t := reflect.TypeOf(val[i])
+			opt.copyFuncs = append(opt.copyFuncs, copyFuncEntry{
+				t, func(src any) any { return src },
+			})
+		}
+	}
+}
+
+// ZeroTypes returns a DeepCopyOption that substitutes a fresh zero value for
+// the values of the given types instead of deep copying them. Use it for
+// stateful objects whose copied state would be invalid or dangerous to share,
+// such as resetting a sync.Mutex to its unlocked state.
+func ZeroTypes(val ...any) DeepCopyOption {
+	return func(opt *copyConfig) {
+		for i := range val {
+			t := reflect.TypeOf(val[i])
+			opt.copyFuncs = append(opt.copyFuncs, copyFuncEntry{
+				t, func(src any) any { return reflect.Zero(t).Interface() },
+			})
 		}
 	}
 }
@@ -126,6 +200,12 @@ func copyAny(src any, ptrs map[uintptr]any, copyConf *copyConfig) (dst any) {
 	v := reflect.ValueOf(src)
 	if !v.IsValid() {
 		return src
+	}
+
+	// A caller-provided copy function overrides the default behavior for
+	// its type, e.g. retaining singletons or zeroing stateful objects.
+	if fn, ok := copyConf.customCopy(v.Type()); ok {
+		return fn(src)
 	}
 
 	// Look up the corresponding copy function.
