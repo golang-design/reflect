@@ -50,23 +50,25 @@ following options to override the default behavior per type:
 ```go
 dst := reflect.DeepCopy(src,
 	// Keep a singleton shared by reference instead of copying it.
-	reflect.RetainTypes(theSingleton),
+	reflect.RetainType[*Config](),
 	// Reset a stateful value to its zero value (e.g. an unlocked mutex).
-	reflect.ZeroTypes(sync.Mutex{}),
+	reflect.ZeroType[sync.Mutex](),
 	// General escape hatch: provide arbitrary per-type copy logic. T may be a
 	// concrete type or an interface (applies to any implementing dynamic type).
 	reflect.WithCopyFunc(func(c net.Conn) net.Conn { return reconnect(c) }),
 )
 ```
 
-`RetainTypes` and `ZeroTypes` are thin wrappers over `WithCopyFunc`.
+The type parameter may be a concrete type or an interface; an interface applies
+to every value whose dynamic type implements it. `RetainType` and `ZeroType` are
+thin wrappers over `WithCopyFunc`.
 
 Additional options control structural behavior:
 
 - `DisallowCopyUnexported()` skips unexported struct fields instead of copying them.
 - `DisallowCopyCircular()` panics on circular structures instead of handling them.
 - `DisallowCopyBidirectionalChan()` keeps the source channel instead of creating a new one.
-- `DisallowTypes(vals...)` panics if a value of the given types is encountered.
+- `DisallowType[T]()` panics if a value of type T (concrete or interface) is encountered.
 
 ## Design notes
 
@@ -82,7 +84,7 @@ These answer the questions raised in
   `reflect` cannot set unexported fields directly). Opt out with
   `DisallowCopyUnexported()`.
 - **Singletons and stateful objects** are the cases where blindly copying memory
-  is wrong; `RetainTypes`, `ZeroTypes` and `WithCopyFunc` exist to handle them
+  is wrong; `RetainType`, `ZeroType` and `WithCopyFunc` exist to handle them
   without baking a `Clone`-style interface into the type system.
 - **Cost.** Deep copy is not free: it allocates roughly one allocation per
   copied element. See `bench_test.go`. Prefer a hand-written copy on hot paths.
