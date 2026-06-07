@@ -6,7 +6,8 @@
 
 // Package reflect implements the proposal https://go.dev/issue/51520.
 //
-// Warning: Not largely tested. Use it with care.
+// It provides a generic DeepCopy and a set of DeepCopyOption values to
+// customize how singletons and stateful objects are copied.
 package reflect
 
 import (
@@ -76,13 +77,13 @@ func DisallowCopyBidirectionalChan() DeepCopyOption {
 	}
 }
 
-// DisallowTypes returns a DeepCopyOption that disallows copying any types
-// that are in given values.
-func DisallowTypes(val ...any) DeepCopyOption {
+// DisallowType returns a DeepCopyOption that panics when a value of type T is
+// encountered during copying. T may be a concrete type or an interface type;
+// for an interface, copying any value whose dynamic type implements T panics.
+func DisallowType[T any]() DeepCopyOption {
+	t := reflect.TypeOf((*T)(nil)).Elem()
 	return func(opt *copyConfig) {
-		for i := range val {
-			opt.disallowCopyTypes = append(opt.disallowCopyTypes, reflect.TypeOf(val[i]))
-		}
+		opt.disallowCopyTypes = append(opt.disallowCopyTypes, t)
 	}
 }
 
@@ -96,7 +97,7 @@ func DisallowTypes(val ...any) DeepCopyOption {
 // applies to every value whose dynamic type implements T (unless a more
 // specific concrete WithCopyFunc is also registered for that value's type).
 //
-// RetainTypes and ZeroTypes are convenience wrappers over WithCopyFunc.
+// RetainType and ZeroType are convenience wrappers over WithCopyFunc.
 func WithCopyFunc[T any](fn func(src T) (dst T)) DeepCopyOption {
 	t := reflect.TypeOf((*T)(nil)).Elem()
 	wrapped := func(src any) any { return fn(src.(T)) }
@@ -105,33 +106,22 @@ func WithCopyFunc[T any](fn func(src T) (dst T)) DeepCopyOption {
 	}
 }
 
-// RetainTypes returns a DeepCopyOption that retains (shares by reference) the
-// values of the given types instead of deep copying them. Use it for pointers
-// to singletons that must remain singletons in the copied result.
-func RetainTypes(val ...any) DeepCopyOption {
-	return func(opt *copyConfig) {
-		for i := range val {
-			t := reflect.TypeOf(val[i])
-			opt.copyFuncs = append(opt.copyFuncs, copyFuncEntry{
-				t, func(src any) any { return src },
-			})
-		}
-	}
+// RetainType returns a DeepCopyOption that retains (shares by reference) values
+// of type T instead of deep copying them. Use it for singletons that must
+// remain singletons in the copied result.
+//
+// RetainType matches by type: every value of type T is retained. To retain one
+// specific instance, use WithCopyFunc with an identity check on that value.
+func RetainType[T any]() DeepCopyOption {
+	return WithCopyFunc(func(src T) (dst T) { return src })
 }
 
-// ZeroTypes returns a DeepCopyOption that substitutes a fresh zero value for
-// the values of the given types instead of deep copying them. Use it for
-// stateful objects whose copied state would be invalid or dangerous to share,
-// such as resetting a sync.Mutex to its unlocked state.
-func ZeroTypes(val ...any) DeepCopyOption {
-	return func(opt *copyConfig) {
-		for i := range val {
-			t := reflect.TypeOf(val[i])
-			opt.copyFuncs = append(opt.copyFuncs, copyFuncEntry{
-				t, func(src any) any { return reflect.Zero(t).Interface() },
-			})
-		}
-	}
+// ZeroType returns a DeepCopyOption that substitutes a fresh zero value for
+// values of type T instead of deep copying them. Use it for stateful objects
+// whose copied state would be invalid or dangerous to share, such as resetting
+// a sync.Mutex to its unlocked state.
+func ZeroType[T any]() DeepCopyOption {
+	return WithCopyFunc(func(src T) (dst T) { return })
 }
 
 // DeepCopy copies src to dst recursively.
@@ -189,9 +179,10 @@ func DeepCopy[T any](src T, opts ...DeepCopyOption) (dst T) {
 }
 
 func copyAny(src any, ptrs map[uintptr]any, copyConf *copyConfig) (dst any) {
-	if len(copyConf.disallowCopyTypes) != 0 {
+	if srcType := reflect.TypeOf(src); srcType != nil {
 		for i := range copyConf.disallowCopyTypes {
-			if reflect.TypeOf(src) == copyConf.disallowCopyTypes[i] {
+			dt := copyConf.disallowCopyTypes[i]
+			if srcType == dt || (dt.Kind() == reflect.Interface && srcType.Implements(dt)) {
 				panic(fmt.Sprintf("reflect: deep copying type %T is disallowed", src))
 			}
 		}
@@ -340,7 +331,9 @@ func copyStruct(x any, ptrs map[uintptr]any, copyConf *copyConfig) any {
 			dc.Elem().Field(i).Set(reflect.ValueOf(item))
 		} else {
 			item := copyAny(valueInterfaceUnsafe(v.Field(i)), ptrs, copyConf)
-			setField(dc.Elem().Field(i), reflect.ValueOf(item))
+			if iv := reflect.ValueOf(item); iv.IsValid() {
+				setField(dc.Elem().Field(i), iv)
+			}
 		}
 	}
 	return dc.Elem().Interface()
