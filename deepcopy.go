@@ -283,7 +283,12 @@ func copyMap(x any, ptrs map[uintptr]any, copyConf *copyConfig) any {
 	for iter.Next() {
 		item := copyAny(iter.Value().Interface(), ptrs, copyConf)
 		k := copyAny(iter.Key().Interface(), ptrs, copyConf)
-		dc.SetMapIndex(reflect.ValueOf(k), reflect.ValueOf(item))
+		v := reflect.ValueOf(item)
+		if item == nil {
+			var nilV any
+			v = reflect.ValueOf(&nilV).Elem()
+		}
+		dc.SetMapIndex(reflect.ValueOf(k), v)
 	}
 	return dc.Interface()
 }

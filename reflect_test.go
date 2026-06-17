@@ -57,6 +57,7 @@ func TestDeepCopy(t *testing.T) {
 		}, // 10, more complex test
 		{uintptr(unsafe.Pointer(&aValidAddress))}, // 11, uintptr
 		// {unsafe.Pointer(&aValidAddress)},          // 12, unsafe.Pointer
+		{map[string]any{"1": nil, "2": "value"}}, // 13, map with nil values
 	}
 
 	for i, test := range tests {
